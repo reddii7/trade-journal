@@ -129,13 +129,14 @@ export default function Dashboard() {
 
   const recentTrades = trades.slice(0, 8);
 
-  if (loading || statsLoading) {
+  if (loading && trades.length === 0) {
     return (
       <Box p="xl">
         <SimpleGrid cols={{ base: 2, sm: 4 }} mb="xl">
-          {[1, 2, 3, 4].map((i) => <Skeleton key={i} h={100} radius="md" />)}
+          {[1, 2, 3, 4].map((i) => <Skeleton key={i} h={100} radius="md" animate />)}
         </SimpleGrid>
-        <Skeleton h={280} radius="md" mb="xl" />
+        <Skeleton h={280} radius="md" mb="xl" animate />
+        <Skeleton h={200} radius="md" animate />
       </Box>
     );
   }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { Trade, TradeWithTags } from '@/types/database';
+import type { Trade, TradeTag, TradeWithTags } from '@/types/database';
 import { useAuth } from '@/contexts/AuthContext';
 
 export interface TradeFilters {
@@ -22,21 +22,16 @@ export function useTrades(filters?: TradeFilters) {
   const [error, setError] = useState<string | null>(null);
 
   const fetchTrades = useCallback(async () => {
-    if (!user) return;
+    if (!user) { setLoading(false); return; }
     setLoading(true);
     setError(null);
 
     try {
-      let query = supabase
+      // Simple flat query — avoids PostgREST nested join issues
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let query = (supabase as any)
         .from('trades')
-        .select(`
-          *,
-          trade_tag_associations(
-            tag_id,
-            trade_tags(id, name, color, category)
-          ),
-          psych_logs(*)
-        `)
+        .select('*')
         .eq('user_id', user.id)
         .order('entry_date', { ascending: false });
 
@@ -52,31 +47,45 @@ export function useTrades(filters?: TradeFilters) {
       const { data, error: fetchError } = await query;
       if (fetchError) throw fetchError;
 
-      // Flatten tags
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const tradesWithTags = ((data as any[]) || []).map((t: any) => ({
+      const rawTrades = (data as any[]) || [];
+
+      // Fetch tag associations separately if there are trades
+      let tagMap: Record<string, TradeTag[]> = {};
+      if (rawTrades.length > 0) {
+        const tradeIds = rawTrades.map((t: { id: string }) => t.id);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: assocData } = await (supabase as any)
+          .from('trade_tag_associations')
+          .select('trade_id, trade_tags(id, name, color, category)')
+          .in('trade_id', tradeIds);
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const row of (assocData || []) as any[]) {
+          if (!tagMap[row.trade_id]) tagMap[row.trade_id] = [];
+          if (row.trade_tags) tagMap[row.trade_id].push(row.trade_tags as TradeTag);
+        }
+      }
+
+      const tradesWithTags: TradeWithTags[] = rawTrades.map((t: Trade) => ({
         ...t,
-        tags: (t.trade_tag_associations || []).map(
-          (tta: { trade_tags: unknown }) => tta.trade_tags
-        ),
-        psych_log: Array.isArray(t.psych_logs)
-          ? t.psych_logs[0]
-          : t.psych_logs,
-      })) as TradeWithTags[];
+        tags: tagMap[t.id] || [],
+      }));
 
       // Filter by tags if needed
       if (filters?.tags && filters.tags.length > 0) {
-        const filtered = tradesWithTags.filter((trade) =>
-          filters.tags!.some((tagId) =>
-            trade.tags?.some((t) => t.id === tagId)
+        setTrades(
+          tradesWithTags.filter((trade) =>
+            filters.tags!.some((tagId) => trade.tags?.some((tg) => tg.id === tagId))
           )
         );
-        setTrades(filtered);
       } else {
         setTrades(tradesWithTags);
       }
     } catch (err) {
+      console.error('[useTrades]', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch trades');
+      setTrades([]);
     } finally {
       setLoading(false);
     }
@@ -108,14 +117,16 @@ export function useTradeStats() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) { setLoading(false); return; }
     const compute = async () => {
-      const { data } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
         .from('trades')
         .select('net_pnl, r_multiple, status, realized_pnl')
         .eq('user_id', user.id)
         .eq('status', 'CLOSED')
         .order('entry_date', { ascending: true });
+      if (error) { console.error('[useTradeStats]', error); setLoading(false); return; }
 
       if (!data) return;
 
@@ -149,6 +160,7 @@ export function useTradeStats() {
         currentStreak = (last.net_pnl ?? 0) > 0 ? winRun : -lossRun;
       }
 
+      if (!data) { setLoading(false); return; }
       setStats({
         totalTrades: closed.length,
         winRate: closed.length ? (wins.length / closed.length) * 100 : 0,
@@ -175,7 +187,10 @@ export function useTradeStats() {
       });
       setLoading(false);
     };
-    compute();
+    compute().catch((err) => {
+      console.error('[useTradeStats] unexpected:', err);
+      setLoading(false);
+    });
   }, [user]);
 
   return { stats, loading };
