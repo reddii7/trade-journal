@@ -41,7 +41,7 @@ import type { TradeWithTags } from '@/types/database';
 
 const PAGE_SIZE = 25;
 
-type SortKey = 'entry_date' | 'symbol' | 'net_pnl' | 'r_multiple' | 'direction';
+type SortKey = 'entry_date' | 'exit_date' | 'symbol' | 'net_pnl' | 'r_multiple' | 'direction';
 
 export default function TradeLog() {
   const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
@@ -56,7 +56,7 @@ export default function TradeLog() {
   const [dateRange, setDateRange] = useState<[Date | null, Date | null] | [null, null]>([null, null]);
 
   // Sort
-  const [sortKey, setSortKey] = useState<SortKey>('entry_date');
+  const [sortKey, setSortKey] = useState<SortKey>('exit_date');
   const [sortAsc, setSortAsc] = useState(false);
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -86,6 +86,7 @@ export default function TradeLog() {
       let av: number | string | null = null;
       let bv: number | string | null = null;
       switch (sortKey) {
+        case 'exit_date': av = a.exit_date || ''; bv = b.exit_date || ''; break;
         case 'entry_date': av = a.entry_date || ''; bv = b.entry_date || ''; break;
         case 'symbol': av = a.symbol; bv = b.symbol; break;
         case 'net_pnl': av = a.net_pnl ?? 0; bv = b.net_pnl ?? 0; break;
@@ -235,12 +236,12 @@ export default function TradeLog() {
                   />
                 </Table.Th>
                 <Table.Th
-                  onClick={() => toggleSort('entry_date')}
+                  onClick={() => toggleSort('exit_date')}
                   style={{ cursor: 'pointer', userSelect: 'none' }}
                 >
                   <Group gap={4}>
-                    Date
-                    {sortKey === 'entry_date' && <IconSortAscending size={12} style={{ transform: sortAsc ? 'none' : 'scaleY(-1)' }} />}
+                    Close Date
+                    {sortKey === 'exit_date' && <IconSortAscending size={12} style={{ transform: sortAsc ? 'none' : 'scaleY(-1)' }} />}
                   </Group>
                 </Table.Th>
                 <Table.Th onClick={() => toggleSort('symbol')} style={{ cursor: 'pointer' }}>Symbol</Table.Th>
@@ -287,12 +288,16 @@ export default function TradeLog() {
                     <Table.Td>
                       <Stack gap={0}>
                         <Text size="sm" fw={500}>
-                          {trade.entry_date
+                          {trade.exit_date
+                            ? format(new Date(trade.exit_date), 'dd MMM yy')
+                            : trade.entry_date
                             ? format(new Date(trade.entry_date), 'dd MMM yy')
                             : '—'}
                         </Text>
                         <Text size="xs" c="dimmed">
-                          {trade.entry_date
+                          {trade.exit_date
+                            ? format(new Date(trade.exit_date), 'HH:mm')
+                            : trade.entry_date
                             ? format(new Date(trade.entry_date), 'HH:mm')
                             : ''}
                         </Text>

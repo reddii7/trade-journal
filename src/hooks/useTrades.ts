@@ -39,7 +39,7 @@ export function useTrades(filters?: TradeFilters) {
         .from('trades')
         .select('*')
         .eq('user_id', user.id)
-        .order('entry_date', { ascending: false });
+        .order('exit_date', { ascending: false, nullsFirst: false });
 
       if (filters?.journalId) query = query.eq('journal_id', filters.journalId);
       if (filters?.symbol) query = query.ilike('symbol', `%${filters.symbol}%`);
