@@ -40,26 +40,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // stop the spinner after 8 seconds so the error page is reachable.
     const timeout = setTimeout(() => setLoading(false), 8000);
 
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        clearTimeout(timeout);
-        setSession(session);
-        setUser(session?.user ?? null);
-        if (session?.user) fetchProfile(session.user.id);
-        setLoading(false);
-      })
-      .catch((err) => {
-        clearTimeout(timeout);
-        console.error('[Auth] getSession failed:', err);
-        setLoading(false);
-      });
-
+    // Use onAuthStateChange as the single source of truth — getSession
+    // triggers it immediately with the current session, so we don't need
+    // to call both. This prevents double-firing of fetchTrades in hooks.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (_event, session) => {
+        clearTimeout(timeout);
         setSession(session);
         setUser(session?.user ?? null);
         if (session?.user) {
-          await fetchProfile(session.user.id);
+          fetchProfile(session.user.id);
         } else {
           setProfile(null);
         }
