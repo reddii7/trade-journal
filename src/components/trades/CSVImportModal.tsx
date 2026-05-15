@@ -97,13 +97,15 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
 
       // Fetch existing transaction IDs to skip duplicates
       const existingRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/trades?select=ig_transaction_id&user_id=eq.${user.id}&ig_transaction_id=not.is.null`,
-        { headers }
+        `${SUPABASE_URL}/rest/v1/trades?select=ig_transaction_id&user_id=eq.${user.id}`,
+        { headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` } }
       );
-      const existingData: { ig_transaction_id: string }[] = existingRes.ok
+      const existingData: { ig_transaction_id: string | null }[] = existingRes.ok
         ? await existingRes.json()
         : [];
-      const existingSet = new Set(existingData.map((r) => r.ig_transaction_id));
+      const existingSet = new Set(
+        existingData.map((r) => r.ig_transaction_id).filter(Boolean)
+      );
 
       const updated = [...parsedRows];
       const toInsert: Array<{ trade: Partial<Trade>; index: number }> = [];
@@ -125,6 +127,9 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
       for (let c = 0; c < toInsert.length; c += CHUNK) {
         const chunk = toInsert.slice(c, c + CHUNK);
         const rows = chunk.map(({ trade }) => ({ ...trade, user_id: user.id }));
+
+        // Log first row to diagnose any 400 errors
+        console.log('[CSVImport] sample row:', JSON.stringify(rows[0]));
 
         const res = await fetch(`${SUPABASE_URL}/rest/v1/trades`, {
           method: 'POST',
