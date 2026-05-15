@@ -138,10 +138,10 @@ export const handler: Handler = async (event: HandlerEvent) => {
       });
     }
 
-    // Read credentials from Netlify environment variables (set in Netlify UI)
+    // Read credentials — accept both naming conventions
     const apiKey = process.env.IG_API_KEY;
-    const username = process.env.IG_USERNAME;
-    const password = process.env.IG_PASSWORD;
+    const username = process.env.IG_USERNAME || process.env.IG_USER;
+    const password = process.env.IG_PASSWORD || process.env.IG_PASS;
 
     if (!apiKey || !username || !password) {
       return cors({
