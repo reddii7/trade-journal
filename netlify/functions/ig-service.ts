@@ -14,31 +14,43 @@ async function getIGSession(
   username: string,
   password: string
 ): Promise<IGSession> {
-  const res = await fetch(`${baseUrl}/session`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json; charset=UTF-8',
-      'X-IG-API-KEY': apiKey,
-      'Version': '2',
-    },
-    body: JSON.stringify({
-      identifier: username,
-      password: password,
-      encryptedPassword: false,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'Accept': 'application/json; charset=UTF-8',
+        'X-IG-API-KEY': apiKey,
+        'Version': '2',
+      },
+      body: JSON.stringify({
+        identifier: username,
+        password: password,
+        encryptedPassword: false,
+      }),
+    });
+  } catch (fetchErr) {
+    throw new Error(`IG network error (cannot reach ${baseUrl}): ${fetchErr}`);
+  }
+
+  const body = await res.text();
 
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`IG Auth failed (${res.status}): ${body}`);
+    // Parse IG's error response for a useful message
+    let igError = body;
+    try {
+      const parsed = JSON.parse(body);
+      igError = parsed.errorCode || parsed.message || body;
+    } catch { /* not JSON */ }
+    throw new Error(`IG Auth failed [${res.status}]: ${igError}`);
   }
 
   const CST = res.headers.get('CST') || '';
   const X_SECURITY_TOKEN = res.headers.get('X-SECURITY-TOKEN') || '';
 
   if (!CST || !X_SECURITY_TOKEN) {
-    throw new Error('IG Auth: Missing CST or X-SECURITY-TOKEN in response headers');
+    throw new Error(`IG Auth: tokens missing in response headers. Body: ${body.slice(0, 200)}`);
   }
 
   return { CST, X_SECURITY_TOKEN };
