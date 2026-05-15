@@ -62,6 +62,27 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
     if (file && file.name.endsWith('.csv')) handleFile(file);
   };
 
+  // Get auth token directly from localStorage — bypasses supabase-js client
+  // which can hang on session refresh. Direct REST calls are proven to work.
+  const getAuthToken = (): string | null => {
+    try {
+      const key = Object.keys(localStorage).find((k) => k.includes('auth-token'));
+      if (!key) return null;
+      return JSON.parse(localStorage.getItem(key) || '{}')?.access_token ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+  const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+  const supabaseHeaders = (token: string) => ({
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  });
+
   const handleImport = async () => {
     if (!user || parsedRows.length === 0) return;
     setImporting(true);
@@ -69,31 +90,24 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
     setError(null);
 
     try {
-      // Ensure user profile exists (needed for FK constraint)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: profileErr } = await (supabase as any)
-        .from('profiles')
-        .upsert({ id: user.id, email: user.email }, { onConflict: 'id' });
-      if (profileErr) {
-        console.warn('[CSVImport] profile upsert warning:', profileErr.message);
-      }
+      const token = getAuthToken();
+      if (!token) throw new Error('Not authenticated — please sign out and back in.');
 
-      // Fetch existing transaction IDs to detect duplicates in one query
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: existingRefs } = await (supabase as any)
-        .from('trades')
-        .select('ig_transaction_id')
-        .eq('user_id', user.id)
-        .not('ig_transaction_id', 'is', null);
+      const headers = supabaseHeaders(token);
 
-      const existingSet = new Set(
-        (existingRefs || []).map((r: { ig_transaction_id: string }) => r.ig_transaction_id)
+      // Fetch existing transaction IDs to skip duplicates
+      const existingRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/trades?select=ig_transaction_id&user_id=eq.${user.id}&ig_transaction_id=not.is.null`,
+        { headers }
       );
+      const existingData: { ig_transaction_id: string }[] = existingRes.ok
+        ? await existingRes.json()
+        : [];
+      const existingSet = new Set(existingData.map((r) => r.ig_transaction_id));
 
       const updated = [...parsedRows];
       const toInsert: Array<{ trade: Partial<Trade>; index: number }> = [];
 
-      // Mark duplicates upfront
       for (let i = 0; i < updated.length; i++) {
         const txId = updated[i].trade.ig_transaction_id;
         if (txId && existingSet.has(txId)) {
@@ -112,18 +126,16 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
         const chunk = toInsert.slice(c, c + CHUNK);
         const rows = chunk.map(({ trade }) => ({ ...trade, user_id: user.id }));
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error: insertError } = await (supabase as any)
-          .from('trades')
-          .insert(rows);
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/trades`, {
+          method: 'POST',
+          headers: { ...headers, Prefer: 'return=minimal' },
+          body: JSON.stringify(rows),
+        });
 
+        const errText = res.ok ? null : await res.text();
         for (const { index } of chunk) {
-          if (insertError) {
-            updated[index] = {
-              ...updated[index],
-              status: 'error',
-              errorMsg: insertError.message,
-            };
+          if (!res.ok) {
+            updated[index] = { ...updated[index], status: 'error', errorMsg: errText ?? 'Insert failed' };
           } else {
             updated[index] = { ...updated[index], status: 'imported' };
             insertedCount++;
