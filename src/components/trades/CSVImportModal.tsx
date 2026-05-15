@@ -133,6 +133,7 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
         });
 
         const errText = res.ok ? null : await res.text();
+        if (!res.ok) console.error('[CSVImport] insert failed:', errText);
         for (const { index } of chunk) {
           if (!res.ok) {
             updated[index] = { ...updated[index], status: 'error', errorMsg: errText ?? 'Insert failed' };
@@ -254,7 +255,9 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
                       <Table.Td>
                         {row.status === 'imported' && <IconCheck size={14} color="var(--mantine-color-teal-6)" />}
                         {row.status === 'duplicate' && <Badge size="xs" color="gray">DUP</Badge>}
-                        {row.status === 'error' && <IconX size={14} color="var(--mantine-color-red-6)" />}
+                        {row.status === 'error' && (
+                          <Text size="xs" c="red" title={row.errorMsg}>ERR</Text>
+                        )}
                         {row.status === 'pending' && <Badge size="xs" color="blue">READY</Badge>}
                       </Table.Td>
                       <Table.Td>{row.trade.symbol}</Table.Td>
