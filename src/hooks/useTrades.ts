@@ -26,6 +26,12 @@ export function useTrades(filters?: TradeFilters) {
     setLoading(true);
     setError(null);
 
+    // Hard timeout — never stay in loading state more than 6 seconds
+    const timer = setTimeout(() => {
+      console.warn('[useTrades] query timed out');
+      setLoading(false);
+    }, 6000);
+
     try {
       // Simple flat query — avoids PostgREST nested join issues
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,6 +93,7 @@ export function useTrades(filters?: TradeFilters) {
       setError(err instanceof Error ? err.message : 'Failed to fetch trades');
       setTrades([]);
     } finally {
+      clearTimeout(timer);
       setLoading(false);
     }
   }, [user, JSON.stringify(filters)]);
@@ -118,79 +125,76 @@ export function useTradeStats() {
 
   useEffect(() => {
     if (!user) { setLoading(false); return; }
+
     const compute = async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase as any)
-        .from('trades')
-        .select('net_pnl, r_multiple, status, realized_pnl')
-        .eq('user_id', user.id)
-        .eq('status', 'CLOSED')
-        .order('entry_date', { ascending: true });
-      if (error) { console.error('[useTradeStats]', error); setLoading(false); return; }
+      const timer = setTimeout(() => {
+        console.warn('[useTradeStats] timed out after 6s');
+        setLoading(false);
+      }, 6000);
 
-      if (!data) return;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase as any)
+          .from('trades')
+          .select('net_pnl, r_multiple, status')
+          .eq('user_id', user.id)
+          .eq('status', 'CLOSED')
+          .order('entry_date', { ascending: true });
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const closed = (data as any[]).filter((t) => t.status === 'CLOSED');
-      const wins = closed.filter((t: { net_pnl?: number }) => (t.net_pnl ?? 0) > 0);
-      const losses = closed.filter((t: { net_pnl?: number }) => (t.net_pnl ?? 0) < 0);
-      const totalWins = wins.reduce((s: number, t: { net_pnl?: number }) => s + (t.net_pnl ?? 0), 0);
-      const totalLosses = Math.abs(losses.reduce((s: number, t: { net_pnl?: number }) => s + (t.net_pnl ?? 0), 0));
+        clearTimeout(timer);
 
-      // Streak calculation
-      type RawTrade = { net_pnl?: number; r_multiple?: number };
-      let currentStreak = 0;
-      let longestWin = 0;
-      let longestLoss = 0;
-      let winRun = 0;
-      let lossRun = 0;
-      for (const t of closed as RawTrade[]) {
-        if ((t.net_pnl ?? 0) > 0) {
-          winRun++;
-          lossRun = 0;
-          if (winRun > longestWin) longestWin = winRun;
-        } else {
-          lossRun++;
-          winRun = 0;
-          if (lossRun > longestLoss) longestLoss = lossRun;
+        if (error) {
+          console.error('[useTradeStats]', error);
+          setLoading(false);
+          return;
         }
-      }
-      const last = (closed as RawTrade[])[closed.length - 1];
-      if (last) {
-        currentStreak = (last.net_pnl ?? 0) > 0 ? winRun : -lossRun;
-      }
 
-      if (!data) { setLoading(false); return; }
-      setStats({
-        totalTrades: closed.length,
-        winRate: closed.length ? (wins.length / closed.length) * 100 : 0,
-        profitFactor: totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0,
-        totalPnl: (closed as RawTrade[]).reduce((s, t) => s + (t.net_pnl ?? 0), 0),
-        avgRMultiple:
-          (closed as RawTrade[]).filter((t) => t.r_multiple != null).length > 0
-            ? (closed as RawTrade[])
-                .filter((t) => t.r_multiple != null)
-                .reduce((s, t) => s + (t.r_multiple ?? 0), 0) /
-              (closed as RawTrade[]).filter((t) => t.r_multiple != null).length
+        if (!data || data.length === 0) {
+          setLoading(false);
+          return;
+        }
+
+        type RawTrade = { net_pnl?: number; r_multiple?: number };
+        const closed = data as RawTrade[];
+        const wins = closed.filter((t) => (t.net_pnl ?? 0) > 0);
+        const losses = closed.filter((t) => (t.net_pnl ?? 0) < 0);
+        const totalWins = wins.reduce((s, t) => s + (t.net_pnl ?? 0), 0);
+        const totalLosses = Math.abs(losses.reduce((s, t) => s + (t.net_pnl ?? 0), 0));
+
+        let currentStreak = 0, longestWin = 0, longestLoss = 0, winRun = 0, lossRun = 0;
+        for (const t of closed) {
+          if ((t.net_pnl ?? 0) > 0) { winRun++; lossRun = 0; if (winRun > longestWin) longestWin = winRun; }
+          else { lossRun++; winRun = 0; if (lossRun > longestLoss) longestLoss = lossRun; }
+        }
+        const last = closed[closed.length - 1];
+        if (last) currentStreak = (last.net_pnl ?? 0) > 0 ? winRun : -lossRun;
+
+        setStats({
+          totalTrades: closed.length,
+          winRate: closed.length ? (wins.length / closed.length) * 100 : 0,
+          profitFactor: totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0,
+          totalPnl: closed.reduce((s, t) => s + (t.net_pnl ?? 0), 0),
+          avgRMultiple: closed.filter((t) => t.r_multiple != null).length > 0
+            ? closed.filter((t) => t.r_multiple != null).reduce((s, t) => s + (t.r_multiple ?? 0), 0) /
+              closed.filter((t) => t.r_multiple != null).length
             : 0,
-        avgWin: wins.length ? totalWins / wins.length : 0,
-        avgLoss: losses.length ? totalLosses / losses.length : 0,
-        bestTrade: closed.length
-          ? Math.max(...(closed as RawTrade[]).map((t) => t.net_pnl ?? 0))
-          : 0,
-        worstTrade: closed.length
-          ? Math.min(...(closed as RawTrade[]).map((t) => t.net_pnl ?? 0))
-          : 0,
-        currentStreak,
-        longestWinStreak: longestWin,
-        longestLossStreak: longestLoss,
-      });
-      setLoading(false);
+          avgWin: wins.length ? totalWins / wins.length : 0,
+          avgLoss: losses.length ? totalLosses / losses.length : 0,
+          bestTrade: closed.length ? Math.max(...closed.map((t) => t.net_pnl ?? 0)) : 0,
+          worstTrade: closed.length ? Math.min(...closed.map((t) => t.net_pnl ?? 0)) : 0,
+          currentStreak,
+          longestWinStreak: longestWin,
+          longestLossStreak: longestLoss,
+        });
+        setLoading(false);
+      } catch (e) {
+        clearTimeout(timer);
+        console.error('[useTradeStats] unexpected:', e);
+        setLoading(false);
+      }
     };
-    compute().catch((err) => {
-      console.error('[useTradeStats] unexpected:', err);
-      setLoading(false);
-    });
+
+    compute();
   }, [user]);
 
   return { stats, loading };
