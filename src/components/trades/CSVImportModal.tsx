@@ -126,16 +126,41 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
       let insertedCount = 0;
       for (let c = 0; c < toInsert.length; c += CHUNK) {
         const chunk = toInsert.slice(c, c + CHUNK);
-        const rows = chunk.map(({ trade }) => ({ ...trade, user_id: user.id }));
 
-        // Log first row to diagnose any 400 errors
+        // Build rows — strip raw_ig_data to avoid JSONB encoding issues,
+        // ensure position_size is positive, and omit undefined fields cleanly
+        const rows = chunk.map(({ trade }) => {
+          const row: Record<string, unknown> = { user_id: user.id };
+          const allowedKeys = [
+            'symbol','market_name','direction','status','entry_price','exit_price',
+            'stop_loss','take_profit','position_size','realized_pnl','commission',
+            'fees','entry_date','exit_date','ig_deal_id','ig_deal_reference',
+            'ig_transaction_id','ig_order_type','ig_period','imported_from','notes',
+          ] as const;
+          for (const k of allowedKeys) {
+            const v = trade[k as keyof typeof trade];
+            if (v !== undefined && v !== null) {
+              row[k] = k === 'position_size' ? Math.abs(Number(v)) : v;
+            }
+          }
+          return row;
+        });
+
+        // Build columns param — union of all keys — so PostgREST handles
+        // rows with different present/absent optional fields correctly
+        const allKeys = [...new Set(rows.flatMap(Object.keys))];
+        const columnsParam = allKeys.map(k => `"${k}"`).join(',');
+
         console.log('[CSVImport] sample row:', JSON.stringify(rows[0]));
 
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/trades`, {
-          method: 'POST',
-          headers: { ...headers, Prefer: 'return=minimal' },
-          body: JSON.stringify(rows),
-        });
+        const res = await fetch(
+          `${SUPABASE_URL}/rest/v1/trades?columns=${encodeURIComponent(columnsParam)}`,
+          {
+            method: 'POST',
+            headers: { ...headers, Prefer: 'return=minimal' },
+            body: JSON.stringify(rows),
+          }
+        );
 
         const errText = res.ok ? null : await res.text();
         if (!res.ok) console.error('[CSVImport] insert failed:', errText);
