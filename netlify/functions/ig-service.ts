@@ -37,13 +37,20 @@ async function getIGSession(
   const body = await res.text();
 
   if (!res.ok) {
-    // Parse IG's error response for a useful message
     let igError = body;
+    let errorCode = '';
     try {
-      const parsed = JSON.parse(body);
-      igError = parsed.errorCode || parsed.message || body;
-    } catch { /* not JSON */ }
-    throw new Error(`IG Auth failed [${res.status}]: ${igError}`);
+      const parsed = JSON.parse(body) as { errorCode?: string; message?: string };
+      errorCode = parsed.errorCode || '';
+      igError = errorCode || parsed.message || body;
+    } catch {
+      /* not JSON */
+    }
+    const hint =
+      errorCode === 'error.security.api-key-invalid'
+        ? ' Regenerate the key in IG (My IG → Settings → API keys). One key per environment: use the key from your DEMO account when accountType is DEMO, LIVE when LIVE. In Netlify, IG_API_KEY must match exactly (no spaces/newlines).'
+        : '';
+    throw new Error(`IG Auth failed [${res.status}]: ${igError}.${hint}`);
   }
 
   const CST = res.headers.get('CST') || '';
