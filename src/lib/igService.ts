@@ -114,39 +114,55 @@ export function parseIGCsv(csvText: string): Partial<Trade>[] {
   return result.data
     .filter(
       (row) =>
+        // Keep all rows with a transaction type and market name.
+        // Include dividends, interest, and adjustments — not just DEAL rows.
+        // Only exclude pure cash-only rows with no market context.
         row['Transaction type'] &&
-        !row['Cash transaction']?.toString().toLowerCase().includes('true') &&
         row.MarketName
     )
     .map((row) => {
       const plAmount = parseFloat(row['PL Amount']?.replace(/[^0-9.-]/g, '') || '0');
       const openLevel = parseFloat(row['Open level'] || '0');
       const closeLevel = parseFloat(row['Close level'] || '0');
-      const size = parseFloat(row.Size || '0');
+      const rawSize = parseFloat(row.Size || '0');
+      // IG uses negative size for SELL trades — store absolute value
+      const size = Math.abs(rawSize);
 
-      // Parse direction from transaction type or price movement
       const txType = row['Transaction type']?.toUpperCase() || '';
+      const isDeal = txType === 'DEAL' || txType.includes('TRADE');
+
+      // Direction: use size sign if available, else infer from price movement
       let direction: 'BUY' | 'SELL' = 'BUY';
-      if (txType.includes('SELL') || txType.includes('SHORT')) {
+      if (rawSize < 0) {
+        direction = 'SELL';
+      } else if (rawSize > 0) {
+        direction = 'BUY';
+      } else if (txType.includes('SELL') || txType.includes('SHORT')) {
         direction = 'SELL';
       } else if (txType.includes('BUY') || txType.includes('LONG')) {
         direction = 'BUY';
       } else {
-        // Infer from price movement
         direction = closeLevel > openLevel ? 'BUY' : 'SELL';
       }
 
       const openDate = row.OpenDateUtc || row.TextDate;
       const closeDate = row.DateUtc || row.TextDate;
 
-      // Extract symbol from market name (first word usually)
       const marketName = row.MarketName || '';
       const symbol = marketName.split(' ')[0] || marketName;
+
+      // Sanitise raw row for safe JSONB storage (all values to strings)
+      const safeRawData: Record<string, string> = {};
+      for (const [k, v] of Object.entries(row)) {
+        safeRawData[k] = String(v ?? '');
+      }
 
       return {
         symbol,
         market_name: marketName,
         direction,
+        // Non-deal rows (dividends, interest, adjustments) stored as CLOSED
+        // but flagged via ig_order_type so they can be filtered separately
         status: 'CLOSED' as const,
         entry_price: openLevel || undefined,
         exit_price: closeLevel || undefined,
@@ -159,8 +175,10 @@ export function parseIGCsv(csvText: string): Partial<Trade>[] {
         ig_deal_reference: row.Reference,
         ig_period: row.Period,
         ig_transaction_id: row.Reference,
+        // ig_order_type stores the IG transaction type (DEAL, DIVIDEND, INTEREST, etc.)
+        ig_order_type: isDeal ? undefined : row['Transaction type'],
         imported_from: 'CSV' as const,
-        raw_ig_data: row as unknown as import('@/types/database').Json,
+        raw_ig_data: safeRawData as unknown as import('@/types/database').Json,
       } as Partial<Trade>;
     });
 }

@@ -136,11 +136,12 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
             'stop_loss','take_profit','position_size','realized_pnl','commission',
             'fees','entry_date','exit_date','ig_deal_id','ig_deal_reference',
             'ig_transaction_id','ig_order_type','ig_period','imported_from','notes',
+            'raw_ig_data',
           ] as const;
           for (const k of allowedKeys) {
             const v = trade[k as keyof typeof trade];
             if (v !== undefined && v !== null) {
-              row[k] = k === 'position_size' ? Math.abs(Number(v)) : v;
+              row[k] = v;
             }
           }
           return row;
