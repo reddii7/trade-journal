@@ -123,6 +123,21 @@ export const handler: Handler = async (event: HandlerEvent) => {
 
     const { action, accountType = 'DEMO' } = body;
 
+    // Debug endpoint — MUST be before credential check so it works even when creds are missing
+    if (action === 'debug') {
+      return cors({
+        statusCode: 200,
+        body: JSON.stringify({
+          IG_API_KEY: !!process.env.IG_API_KEY,
+          IG_USERNAME: !!process.env.IG_USERNAME,
+          IG_PASSWORD: !!process.env.IG_PASSWORD,
+          NODE_ENV: process.env.NODE_ENV,
+          igEnvKeys: Object.keys(process.env).filter(k => k.startsWith('IG')),
+          allEnvCount: Object.keys(process.env).length,
+        }),
+      });
+    }
+
     // Read credentials from Netlify environment variables (set in Netlify UI)
     const apiKey = process.env.IG_API_KEY;
     const username = process.env.IG_USERNAME;
@@ -133,26 +148,13 @@ export const handler: Handler = async (event: HandlerEvent) => {
         statusCode: 500,
         body: JSON.stringify({
           error: 'IG API credentials not configured. Set IG_API_KEY, IG_USERNAME, IG_PASSWORD in Netlify environment variables.',
+          hint: 'In Netlify → Site configuration → Environment variables, ensure all three are set with scope "All" or "Functions".',
         }),
       });
     }
 
     const baseUrl = accountType === 'LIVE' ? IG_LIVE_BASE : IG_DEMO_BASE;
     const session = await getIGSession(baseUrl, apiKey, username, password);
-
-    // Debug endpoint — returns which env vars are present (never the values)
-    if (action === 'debug') {
-      return cors({
-        statusCode: 200,
-        body: JSON.stringify({
-          IG_API_KEY: !!process.env.IG_API_KEY,
-          IG_USERNAME: !!process.env.IG_USERNAME,
-          IG_PASSWORD: !!process.env.IG_PASSWORD,
-          NODE_ENV: process.env.NODE_ENV,
-          allKeys: Object.keys(process.env).filter(k => k.startsWith('IG')),
-        }),
-      });
-    }
 
     switch (action) {
       case 'testConnection': {
