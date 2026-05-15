@@ -51,7 +51,7 @@ export default function TradeLog() {
   // Filters
   const [search, setSearch] = useState('');
   const [filterDirection, setFilterDirection] = useState<string | null>(null);
-  const [filterStatus, setFilterStatus] = useState<string | null>('CLOSED');
+  const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [filterTags, setFilterTags] = useState<string[]>([]);
   const [dateRange, setDateRange] = useState<[Date | null, Date | null] | [null, null]>([null, null]);
 
@@ -244,6 +244,7 @@ export default function TradeLog() {
                   </Group>
                 </Table.Th>
                 <Table.Th onClick={() => toggleSort('symbol')} style={{ cursor: 'pointer' }}>Symbol</Table.Th>
+                <Table.Th>Type</Table.Th>
                 <Table.Th>Direction</Table.Th>
                 <Table.Th>Entry</Table.Th>
                 <Table.Th>Exit</Table.Th>
@@ -258,13 +259,13 @@ export default function TradeLog() {
             <Table.Tbody>
               {loading ? (
                 <Table.Tr>
-                  <Table.Td colSpan={12}>
+                  <Table.Td colSpan={13}>
                     <Text ta="center" c="dimmed" py="xl">Loading trades...</Text>
                   </Table.Td>
                 </Table.Tr>
               ) : paged.length === 0 ? (
                 <Table.Tr>
-                  <Table.Td colSpan={12}>
+                  <Table.Td colSpan={13}>
                     <Stack align="center" py="xl">
                       <Text c="dimmed">No trades found.</Text>
                       <Text size="sm" c="dimmed">Import a CSV or add trades manually.</Text>
@@ -299,6 +300,20 @@ export default function TradeLog() {
                     </Table.Td>
                     <Table.Td>
                       <Text fw={600} size="sm">{trade.symbol}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge
+                        size="xs"
+                        color={
+                          !trade.ig_order_type ? 'blue'
+                          : trade.ig_order_type.toUpperCase().includes('DIV') ? 'grape'
+                          : trade.ig_order_type.toUpperCase().includes('INT') ? 'orange'
+                          : 'gray'
+                        }
+                        variant="light"
+                      >
+                        {trade.ig_order_type ? trade.ig_order_type.toUpperCase() : 'DEAL'}
+                      </Badge>
                     </Table.Td>
                     <Table.Td>
                       <Badge
