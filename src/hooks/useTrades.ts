@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { sbSelect, sbInsert, getAuthToken } from '@/lib/supabaseFetch';
 import type { Trade, TradeTag, TradeWithTags } from '@/types/database';
 import { useAuth } from '@/contexts/AuthContext';
+
+const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, '');
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 export interface TradeFilters {
   journalId?: string;
@@ -26,74 +30,35 @@ export function useTrades(filters?: TradeFilters) {
     setLoading(true);
     setError(null);
 
-    // Hard timeout — never stay in loading state more than 6 seconds
-    const timer = setTimeout(() => {
-      console.warn('[useTrades] query timed out');
-      setLoading(false);
-    }, 6000);
-
     try {
-      // Simple flat query — avoids PostgREST nested join issues
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let query = (supabase as any)
-        .from('trades')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('exit_date', { ascending: false, nullsFirst: false });
+      const token = getAuthToken();
+      if (!token) { setLoading(false); return; }
 
-      if (filters?.journalId) query = query.eq('journal_id', filters.journalId);
-      if (filters?.symbol) query = query.ilike('symbol', `%${filters.symbol}%`);
-      if (filters?.direction) query = query.eq('direction', filters.direction);
-      if (filters?.status) query = query.eq('status', filters.status);
-      if (filters?.dateFrom) query = query.gte('entry_date', filters.dateFrom);
-      if (filters?.dateTo) query = query.lte('entry_date', filters.dateTo);
-      if (filters?.minPnl !== undefined) query = query.gte('net_pnl', filters.minPnl);
-      if (filters?.maxPnl !== undefined) query = query.lte('net_pnl', filters.maxPnl);
+      // Build query params
+      const params = new URLSearchParams({ select: '*', 'user_id': `eq.${user.id}` });
+      params.append('order', 'exit_date.desc.nullslast');
 
-      const { data, error: fetchError } = await query;
-      if (fetchError) throw fetchError;
+      if (filters?.symbol) params.append('symbol', `ilike.%${filters.symbol}%`);
+      if (filters?.direction) params.append('direction', `eq.${filters.direction}`);
+      if (filters?.status) params.append('status', `eq.${filters.status}`);
+      if (filters?.dateFrom) params.append('entry_date', `gte.${filters.dateFrom}`);
+      if (filters?.dateTo) params.append('entry_date', `lte.${filters.dateTo}`);
+      if (filters?.minPnl !== undefined) params.append('net_pnl', `gte.${filters.minPnl}`);
+      if (filters?.maxPnl !== undefined) params.append('net_pnl', `lte.${filters.maxPnl}`);
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rawTrades = (data as any[]) || [];
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/trades?${params}`, {
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
+      });
 
-      // Fetch tag associations separately if there are trades
-      let tagMap: Record<string, TradeTag[]> = {};
-      if (rawTrades.length > 0) {
-        const tradeIds = rawTrades.map((t: { id: string }) => t.id);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: assocData } = await (supabase as any)
-          .from('trade_tag_associations')
-          .select('trade_id, trade_tags(id, name, color, category)')
-          .in('trade_id', tradeIds);
+      if (!res.ok) throw new Error(`Trades fetch failed: ${res.status}`);
+      const rawTrades: Trade[] = await res.json();
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        for (const row of (assocData || []) as any[]) {
-          if (!tagMap[row.trade_id]) tagMap[row.trade_id] = [];
-          if (row.trade_tags) tagMap[row.trade_id].push(row.trade_tags as TradeTag);
-        }
-      }
-
-      const tradesWithTags: TradeWithTags[] = rawTrades.map((t: Trade) => ({
-        ...t,
-        tags: tagMap[t.id] || [],
-      }));
-
-      // Filter by tags if needed
-      if (filters?.tags && filters.tags.length > 0) {
-        setTrades(
-          tradesWithTags.filter((trade) =>
-            filters.tags!.some((tagId) => trade.tags?.some((tg) => tg.id === tagId))
-          )
-        );
-      } else {
-        setTrades(tradesWithTags);
-      }
+      setTrades(rawTrades.map((t) => ({ ...t, tags: [] })));
     } catch (err) {
       console.error('[useTrades]', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch trades');
       setTrades([]);
     } finally {
-      clearTimeout(timer);
       setLoading(false);
     }
   }, [user, JSON.stringify(filters)]);
@@ -127,27 +92,23 @@ export function useTradeStats() {
     if (!user) { setLoading(false); return; }
 
     const compute = async () => {
-      const timer = setTimeout(() => {
-        console.warn('[useTradeStats] timed out after 6s');
-        setLoading(false);
-      }, 6000);
-
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data, error } = await (supabase as any)
-          .from('trades')
-          .select('net_pnl, r_multiple, status')
-          .eq('user_id', user.id)
-          .eq('status', 'CLOSED')
-          .order('entry_date', { ascending: true });
+        const token = getAuthToken();
+        if (!token) { setLoading(false); return; }
 
-        clearTimeout(timer);
+        const params = new URLSearchParams({
+          select: 'net_pnl,r_multiple,status',
+          user_id: `eq.${user.id}`,
+          status: 'eq.CLOSED',
+          order: 'entry_date.asc',
+        });
 
-        if (error) {
-          console.error('[useTradeStats]', error);
-          setLoading(false);
-          return;
-        }
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/trades?${params}`, {
+          headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
+        });
+
+        if (!res.ok) { setLoading(false); return; }
+        const data: { net_pnl?: number; r_multiple?: number }[] = await res.json();
 
         if (!data || data.length === 0) {
           setLoading(false);
@@ -188,7 +149,6 @@ export function useTradeStats() {
         });
         setLoading(false);
       } catch (e) {
-        clearTimeout(timer);
         console.error('[useTradeStats] unexpected:', e);
         setLoading(false);
       }

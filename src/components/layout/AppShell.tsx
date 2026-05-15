@@ -62,31 +62,33 @@ export default function AppShellLayout({ children }: { children: React.ReactNode
         return;
       }
 
-      // Import transactions as trades
+      // Import transactions as trades using direct REST fetch
       const { igTransactionToTrade } = await import('../../lib/igService');
+      const { getAuthToken, sbInsert } = await import('../../lib/supabaseFetch');
+      const token = getAuthToken();
+      if (!token) throw new Error('Not authenticated');
+
+      const SURL = (import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, '');
+      const SKEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      // Fetch existing transaction IDs in bulk
+      const existingRes = await fetch(
+        `${SURL}/rest/v1/trades?select=ig_transaction_id&user_id=eq.${user.id}`,
+        { headers: { apikey: SKEY, Authorization: `Bearer ${token}` } }
+      );
+      const existingData: { ig_transaction_id: string | null }[] = existingRes.ok
+        ? await existingRes.json() : [];
+      const existingIds = new Set(existingData.map(r => r.ig_transaction_id).filter(Boolean));
+
+      const newTrades = transactions
+        .map((tx) => igTransactionToTrade(tx))
+        .filter((t) => t.ig_transaction_id && !existingIds.has(t.ig_transaction_id!))
+        .map((t) => ({ ...t, user_id: user.id }));
+
       let newCount = 0;
-
-      for (const tx of transactions) {
-        const tradeData = igTransactionToTrade(tx);
-        if (!tradeData.ig_transaction_id) continue;
-
-        // Check duplicate
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: existing } = await (supabase as any)
-          .from('trades')
-          .select('id')
-          .eq('user_id', user.id)
-          .eq('ig_transaction_id', tradeData.ig_transaction_id)
-          .single();
-
-        if (!existing) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await (supabase as any).from('trades').insert({
-            ...tradeData,
-            user_id: user.id,
-          });
-          newCount++;
-        }
+      if (newTrades.length > 0) {
+        await sbInsert('trades', newTrades as Record<string, unknown>[]);
+        newCount = newTrades.length;
       }
 
       notifications.show({
