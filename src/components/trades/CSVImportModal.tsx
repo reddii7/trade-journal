@@ -66,55 +66,81 @@ export default function CSVImportModal({ opened, onClose, onImported }: CSVImpor
     if (!user || parsedRows.length === 0) return;
     setImporting(true);
     setProgress(0);
+    setError(null);
 
-    const updated = [...parsedRows];
-    let count = 0;
+    try {
+      // Ensure user profile exists (needed for FK constraint)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: profileErr } = await (supabase as any)
+        .from('profiles')
+        .upsert({ id: user.id, email: user.email }, { onConflict: 'id' });
+      if (profileErr) {
+        console.warn('[CSVImport] profile upsert warning:', profileErr.message);
+      }
 
-    for (let i = 0; i < updated.length; i++) {
-      const row = updated[i];
-      try {
-        // Check for duplicate by reference
-        if (row.trade.ig_transaction_id) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { data: existing } = await (supabase as any)
-            .from('trades')
-            .select('id')
-            .eq('user_id', user.id)
-            .eq('ig_transaction_id', row.trade.ig_transaction_id)
-            .single();
+      // Fetch existing transaction IDs to detect duplicates in one query
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existingRefs } = await (supabase as any)
+        .from('trades')
+        .select('ig_transaction_id')
+        .eq('user_id', user.id)
+        .not('ig_transaction_id', 'is', null);
 
-          if (existing) {
-            updated[i] = { ...row, status: 'duplicate' };
-            setProgress(Math.round(((i + 1) / updated.length) * 100));
-            setParsedRows([...updated]);
-            continue;
-          }
+      const existingSet = new Set(
+        (existingRefs || []).map((r: { ig_transaction_id: string }) => r.ig_transaction_id)
+      );
+
+      const updated = [...parsedRows];
+      const toInsert: Array<{ trade: Partial<Trade>; index: number }> = [];
+
+      // Mark duplicates upfront
+      for (let i = 0; i < updated.length; i++) {
+        const txId = updated[i].trade.ig_transaction_id;
+        if (txId && existingSet.has(txId)) {
+          updated[i] = { ...updated[i], status: 'duplicate' };
+        } else {
+          toInsert.push({ trade: updated[i].trade, index: i });
         }
+      }
+      setParsedRows([...updated]);
+      setProgress(10);
+
+      // Batch insert in chunks of 50
+      const CHUNK = 50;
+      let insertedCount = 0;
+      for (let c = 0; c < toInsert.length; c += CHUNK) {
+        const chunk = toInsert.slice(c, c + CHUNK);
+        const rows = chunk.map(({ trade }) => ({ ...trade, user_id: user.id }));
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { error: insertError } = await (supabase as any)
           .from('trades')
-          .insert({ ...row.trade, user_id: user.id });
+          .insert(rows);
 
-        if (insertError) throw insertError;
-
-        updated[i] = { ...row, status: 'imported' };
-        count++;
-      } catch (err) {
-        updated[i] = {
-          ...row,
-          status: 'error',
-          errorMsg: err instanceof Error ? err.message : 'Error',
-        };
+        for (const { index } of chunk) {
+          if (insertError) {
+            updated[index] = {
+              ...updated[index],
+              status: 'error',
+              errorMsg: insertError.message,
+            };
+          } else {
+            updated[index] = { ...updated[index], status: 'imported' };
+            insertedCount++;
+          }
+        }
+        setProgress(10 + Math.round(((c + chunk.length) / toInsert.length) * 90));
+        setParsedRows([...updated]);
       }
 
-      setProgress(Math.round(((i + 1) / updated.length) * 100));
-      setParsedRows([...updated]);
+      setImporting(false);
+      setDone(true);
+      if (insertedCount > 0) onImported();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Import failed: ${msg}`);
+      setImporting(false);
     }
-
-    setImporting(false);
-    setDone(true);
-    if (count > 0) onImported();
   };
 
   const handleClose = () => {
